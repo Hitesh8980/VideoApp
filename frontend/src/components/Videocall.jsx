@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from "react";
 import { useParams } from "react-router-dom";
 import { io } from "socket.io-client";
 
-const socket = io("http://192.168.1.11:5003");
+const socket = io("https://videoapp-q3ld.onrender.com/create");
  // Change if backend is on another port
 
 const VideoCall = () => {
@@ -59,38 +59,54 @@ const VideoCall = () => {
     }
   };
 
-  const startCall = async () => {
+  const startCall = async (socketId) => {
     if (!localStream.current) {
       console.error("Local stream is not available.");
       return;
     }
   
     peerConnection.current = new RTCPeerConnection();
-    localStream.current.getTracks().forEach(track => peerConnection.current.addTrack(track, localStream.current));
-    
-    const offer = await peerConnection.current.createOffer();
-    await peerConnection.current.setLocalDescription(offer);
   
-    socket.emit("offer", { offer });
-  };
-
-  socket.on("offer", async ({ offer, from }) => {
-    peerConnection.current = new RTCPeerConnection();
-
     localStream.current.getTracks().forEach((track) => {
       peerConnection.current.addTrack(track, localStream.current);
     });
-
+  
     peerConnection.current.ontrack = (event) => {
-      if (remoteVideoRef.current) remoteVideoRef.current.srcObject = event.streams[0];
+      console.log("Receiving remote stream...");
+      if (remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = event.streams[0];
+      }
     };
+  
+    const offer = await peerConnection.current.createOffer();
+    await peerConnection.current.setLocalDescription(offer);
+  
+    socket.emit("offer", { offer, to: socketId });
+  };
 
+  socket.on("offer", async ({ offer, from }) => {
+    console.log("Received an offer from:", from);
+  
+    peerConnection.current = new RTCPeerConnection();
+  
+    peerConnection.current.ontrack = (event) => {
+      console.log("Receiving remote stream...");
+      if (remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = event.streams[0];
+      }
+    };
+  
+    localStream.current.getTracks().forEach((track) => {
+      peerConnection.current.addTrack(track, localStream.current);
+    });
+  
     await peerConnection.current.setRemoteDescription(offer);
     const answer = await peerConnection.current.createAnswer();
     await peerConnection.current.setLocalDescription(answer);
-
+  
     socket.emit("answer", { answer, to: from });
   });
+  
 
   socket.on("answer", async ({ answer }) => {
     await peerConnection.current.setRemoteDescription(answer);
@@ -117,8 +133,9 @@ const VideoCall = () => {
   };
 
   const copyLink = () => {
-    navigator.clipboard.writeText(window.location.href);
-    alert("Link copied! Share it with others to join.");
+    const roomLink = `${window.location.origin}/room/${roomId}`;
+    navigator.clipboard.writeText(roomLink);
+    alert("Room link copied! Share it with others to join.");
   };
 
   return (
