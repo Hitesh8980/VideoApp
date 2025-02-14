@@ -17,7 +17,7 @@ const VideoCall = () => {
 
     socket.on("user-connected", async (socketId) => {
       console.log("User connected:", socketId);
-      setRemoteSocketId(socketId);
+      if (remoteSocketId !== socketId) setRemoteSocketId(socketId);
       if (!peerConnection.current) await startCall(socketId);
     });
 
@@ -25,9 +25,7 @@ const VideoCall = () => {
       console.log("User disconnected:", socketId);
       if (remoteSocketId === socketId) {
         setRemoteSocketId(null);
-        if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
-        peerConnection.current?.close();
-        peerConnection.current = null;
+        cleanupPeerConnection();
       }
     });
 
@@ -38,13 +36,15 @@ const VideoCall = () => {
 
     socket.on("answer", async ({ answer }) => {
       console.log("Received Answer");
-      await peerConnection.current.setRemoteDescription(answer);
+      if (peerConnection.current) {
+        await peerConnection.current.setRemoteDescription(answer);
+      }
     });
 
     socket.on("ice-candidate", ({ candidate }) => {
-      if (candidate) {
+      if (candidate && peerConnection.current) {
         console.log("Received ICE Candidate");
-        peerConnection.current?.addIceCandidate(new RTCIceCandidate(candidate));
+        peerConnection.current.addIceCandidate(new RTCIceCandidate(candidate));
       }
     });
 
@@ -56,8 +56,8 @@ const VideoCall = () => {
       socket.off("offer");
       socket.off("answer");
       socket.off("ice-candidate");
-      peerConnection.current?.close();
-      peerConnection.current = null;
+      cleanupPeerConnection();
+      cleanupLocalStream();
     };
   }, [roomId, remoteSocketId]);
 
@@ -127,6 +127,25 @@ const VideoCall = () => {
     await peerConnection.current.setLocalDescription(answer);
 
     socket.emit("answer", { answer, to: from });
+  };
+
+  const cleanupPeerConnection = () => {
+    if (peerConnection.current) {
+      peerConnection.current.ontrack = null;
+      peerConnection.current.onicecandidate = null;
+      peerConnection.current.close();
+      peerConnection.current = null;
+    }
+    if (remoteVideoRef.current) {
+      remoteVideoRef.current.srcObject = null;
+    }
+  };
+
+  const cleanupLocalStream = () => {
+    if (localStream.current) {
+      localStream.current.getTracks().forEach((track) => track.stop());
+      localStream.current = null;
+    }
   };
 
   const copyLink = () => {
