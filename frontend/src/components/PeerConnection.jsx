@@ -2,13 +2,13 @@ import React, { useEffect, useState, useRef } from "react";
 import { io } from "socket.io-client";
 import Peer from "simple-peer";
 
-const socket = io("https://videoapp-q3ld.onrender.com"); // Update with your backend URL
+const socket = io("https://videoapp-q3ld.onrender.com"); // Update your backend URL
 
 const PeerConnection = () => {
     const [myId, setMyId] = useState("");
+    const [roomId, setRoomId] = useState("12345"); // Default room ID (change as needed)
     const [users, setUsers] = useState([]);
     const [stream, setStream] = useState(null);
-    const [remoteStream, setRemoteStream] = useState(null);
     const myVideo = useRef();
     const userVideo = useRef();
     const peersRef = useRef([]);
@@ -25,28 +25,29 @@ const PeerConnection = () => {
             .catch((err) => console.error("Error accessing media devices:", err));
 
         // Handle connection
-        socket.on("me", (id) => {
-            setMyId(id);
+        socket.on("connect", () => {
+            setMyId(socket.id);
+            socket.emit("join-room", { roomId, name: `User-${socket.id}` });
         });
 
+        // Receive new users joining
+        socket.on("user-joined", ({ id }) => {
+            console.log("New user joined:", id);
+            setUsers((prevUsers) => [...prevUsers, id]);
+            callUser(id);
+        });
+
+        // Get list of all users in the room
         socket.on("roomUsers", (roomUsers) => {
             setUsers(roomUsers.filter(id => id !== myId)); // Exclude self
         });
 
-        socket.on("newUser", (user) => {
-            console.log("New user joined:", user);
-            setUsers((prevUsers) => [...prevUsers, user]);
-            callUser(user.id);
-        });
-
         socket.on("call-received", ({ from, signal }) => {
-            console.log("Receiving call from:", from);
             answerCall(from, signal);
         });
 
-        socket.on("call-accepted", ({ from, signal }) => {
-            console.log("Call accepted by:", from);
-            const peer = peersRef.current.find(p => p.id === from);
+        socket.on("call-accepted", ({ signal }) => {
+            const peer = peersRef.current.find(p => p.peer);
             if (peer) {
                 peer.peer.signal(signal);
             }
@@ -75,7 +76,6 @@ const PeerConnection = () => {
 
         peer.on("stream", (remoteStream) => {
             console.log("Receiving remote stream");
-            setRemoteStream(remoteStream);
             if (userVideo.current) {
                 userVideo.current.srcObject = remoteStream;
             }
@@ -99,7 +99,6 @@ const PeerConnection = () => {
 
         peer.on("stream", (remoteStream) => {
             console.log("Receiving remote stream from caller");
-            setRemoteStream(remoteStream);
             if (userVideo.current) {
                 userVideo.current.srcObject = remoteStream;
             }
@@ -110,17 +109,34 @@ const PeerConnection = () => {
     };
 
     return (
-        <div style={{ display: "flex", justifyContent: "center", gap: "20px", marginTop: "20px" }}>
-            {/* My Video */}
-            <div style={{ width: "300px", height: "200px", border: "2px solid black", textAlign: "center" }}>
-                <h3>My Video</h3>
-                <video ref={myVideo} autoPlay muted style={{ width: "100%", height: "100%" }} />
-            </div>
+        <div style={{ textAlign: "center", padding: "20px" }}>
+            <h2>Video Chat</h2>
 
-            {/* Other User's Video */}
-            <div style={{ width: "300px", height: "200px", border: "2px solid red", textAlign: "center" }}>
-                <h3>Other User</h3>
-                <video ref={userVideo} autoPlay style={{ width: "100%", height: "100%" }} />
+            <p>Share this link with others:</p>
+            <input
+                type="text"
+                value={window.location.href}
+                readOnly
+                style={{ width: "80%", padding: "5px", marginBottom: "10px" }}
+            />
+
+            <h3>Users in Room:</h3>
+            <ul>
+                {users.length > 0 ? users.map((user) => <li key={user}>{user}</li>) : <p>No other users</p>}
+            </ul>
+
+            <div style={{ display: "flex", justifyContent: "center", gap: "20px", marginTop: "20px" }}>
+                {/* My Video */}
+                <div style={{ width: "300px", height: "200px", border: "2px solid black", textAlign: "center" }}>
+                    <h3>My Video</h3>
+                    <video ref={myVideo} autoPlay muted style={{ width: "100%", height: "100%" }} />
+                </div>
+
+                {/* Other User's Video */}
+                <div style={{ width: "300px", height: "200px", border: "2px solid red", textAlign: "center" }}>
+                    <h3>Other User</h3>
+                    <video ref={userVideo} autoPlay style={{ width: "100%", height: "100%" }} />
+                </div>
             </div>
         </div>
     );
