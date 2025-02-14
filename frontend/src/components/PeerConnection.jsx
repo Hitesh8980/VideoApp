@@ -1,166 +1,104 @@
-import React, { useEffect, useState, useRef } from "react";
-import { io } from "socket.io-client";
-import Peer from "simple-peer";
+import React, { useEffect, useRef, useState } from "react";
+import io from "socket.io-client";
 
-const socket = io("https://videoapp-q3ld.onrender.com"); // Backend URL
+const SOCKET_SERVER_URL = "https://videoapp-q3ld.onrender.com"; // Change to your server URL
 
-const PeerConnection = () => {
-    const [myId, setMyId] = useState("");
-    const [users, setUsers] = useState([]);
-    const [stream, setStream] = useState(null);
-    const [remoteStream, setRemoteStream] = useState(null);
-    const myVideoRef = useRef();
-    const remoteVideoRef = useRef();
-    const peersRef = useRef({});
+const PeerConnection = ({ roomId }) => {
+  const socketRef = useRef(null);
+  const peerRef = useRef(null);
+  const localStreamRef = useRef(null);
+  const remoteStreamRef = useRef(null);
+  const [remoteVideo, setRemoteVideo] = useState(null);
+  const [localVideo, setLocalVideo] = useState(null);
 
-    useEffect(() => {
-        console.log("⚡ Initializing PeerConnection...");
+  useEffect(() => {
+    console.log("⚡ Initializing PeerConnection...");
 
-        // Get user media stream
-        navigator.mediaDevices.getUserMedia({ video: true, audio: true })
-            .then((myStream) => {
-                setStream(myStream);
-                if (myVideoRef.current) {
-                    myVideoRef.current.srcObject = myStream;
-                }
-                console.log("✅ Local video stream acquired");
-            })
-            .catch((err) => console.error("❌ Error accessing media devices:", err));
+    // Connect to socket
+    socketRef.current = io(SOCKET_SERVER_URL);
+    socketRef.current.emit("join-room", roomId);
 
-        // Handle connection
-        socket.on("connect", () => {
-            console.log("🔌 Connected to socket server");
-        });
+    socketRef.current.on("user-joined", ({ id }) => {
+      console.log(`👤 User joined: ${id}`);
+    });
 
-        socket.on("me", (id) => {
-            console.log("🔹 My socket ID:", id);
-            setMyId(id);
-        });
+    socketRef.current.on("call-received", ({ signal, from }) => {
+      console.log("📞 Incoming call from:", from);
+      peerRef.current.setRemoteDescription(new RTCSessionDescription(signal));
+      peerRef.current.createAnswer().then((answer) => {
+        peerRef.current.setLocalDescription(answer);
+        socketRef.current.emit("accept-call", { signal: answer, to: from });
+      });
+    });
 
-        // When a new user joins
-        socket.on("newUser", (userId) => {
-            console.log("👤 New user joined:", userId);
-            setUsers((prevUsers) => [...prevUsers, userId]);
+    socketRef.current.on("call-accepted", (signal) => {
+      console.log("✅ Call accepted, setting remote description...");
+      peerRef.current.setRemoteDescription(new RTCSessionDescription(signal));
+    });
 
-            if (stream) {
-                console.log("📞 Automatically calling new user:", userId);
-                autoCallUser(userId);
-            } else {
-                console.warn("⚠️ Stream not ready yet, waiting to call...");
-            }
-        });
+    // Initialize local stream
+    navigator.mediaDevices
+      .getUserMedia({ video: true, audio: true })
+      .then((stream) => {
+        console.log("✅ Local video stream acquired");
+        localStreamRef.current = stream;
+        setLocalVideo(stream);
 
-        // When receiving a call
-        socket.on("call-received", ({ signal, from }) => {
-            console.log("📩 Incoming call from:", from);
-            answerCall(from, signal);
-        });
-
-        // When a call is accepted
-        socket.on("call-accepted", ({ signal, from }) => {
-            console.log("✅ Call accepted by:", from);
-            if (peersRef.current[from]) {
-                peersRef.current[from].signal(signal);
-            }
-        });
-
-        return () => {
-            console.log("🔴 Disconnecting socket...");
-            socket.disconnect();
+        // Initialize Peer Connection
+        peerRef.current = new RTCPeerConnection();
+        peerRef.current.ontrack = (event) => {
+          console.log("🎥 Remote stream received");
+          setRemoteVideo(event.streams[0]);
         };
-    }, [stream]);
 
-    const autoCallUser = (userToCall) => {
-        if (!userToCall || !stream) {
-            console.error("🚫 Cannot call, missing user or stream.");
-            return;
-        }
-
-        console.log("📞 Calling user:", userToCall);
-
-        const peer = new Peer({
-            initiator: true,
-            trickle: false,
-            stream: stream,
+        stream.getTracks().forEach((track) => {
+          peerRef.current.addTrack(track, stream);
         });
+      })
+      .catch((error) => {
+        console.error("❌ Error getting local stream:", error);
+      });
 
-        peer.on("signal", (signal) => {
-            console.log("📡 Sending call signal to:", userToCall);
-            socket.emit("call-user", { userToCall, signalData: signal, from: myId });
-        });
-
-        peer.on("stream", (incomingStream) => {
-            console.log("🎥 Receiving remote video stream...");
-            setRemoteStream(incomingStream);
-            if (remoteVideoRef.current) {
-                remoteVideoRef.current.srcObject = incomingStream;
-            }
-        });
-
-        peer.on("connect", () => {
-            console.log("🔗 Peer connection established with", userToCall);
-        });
-
-        peer.on("error", (err) => {
-            console.error("❌ Peer connection error:", err);
-        });
-
-        peersRef.current[userToCall] = peer;
+    return () => {
+      console.log("🔴 Cleaning up...");
+      socketRef.current.disconnect();
+      if (peerRef.current) peerRef.current.close();
     };
+  }, [roomId]);
 
-    const answerCall = (from, signal) => {
-        console.log("📞 Answering call from:", from);
+  const callUser = (userToCall) => {
+    console.log("📞 Calling user:", userToCall);
+    peerRef.current.createOffer().then((offer) => {
+      peerRef.current.setLocalDescription(offer);
+      socketRef.current.emit("call-user", {
+        userToCall,
+        signalData: offer,
+        from: socketRef.current.id,
+      });
+    });
+  };
 
-        const peer = new Peer({
-            initiator: false,
-            trickle: false,
-            stream: stream,
-        });
-
-        peer.on("signal", (returnSignal) => {
-            console.log("📡 Sending answer signal to:", from);
-            socket.emit("accept-call", { signal: returnSignal, to: from });
-        });
-
-        peer.on("stream", (incomingStream) => {
-            console.log("🎥 Receiving remote video stream...");
-            setRemoteStream(incomingStream);
-            if (remoteVideoRef.current) {
-                remoteVideoRef.current.srcObject = incomingStream;
-            }
-        });
-
-        peer.on("connect", () => {
-            console.log("🔗 Connected to", from);
-        });
-
-        peer.signal(signal);
-        peersRef.current[from] = peer;
-    };
-
-    return (
-        <div>
-            <h2>My ID: {myId}</h2>
-            <p>Share this link: {window.location.href}</p>
-            <h3>Connected Users:</h3>
-            <ul>
-                {users.map((user) => (
-                    <li key={user}>{user}</li>
-                ))}
-            </ul>
-
-            <div style={{ display: "flex", justifyContent: "center", gap: "20px" }}>
-                <div>
-                    <h3>My Video</h3>
-                    <video ref={myVideoRef} autoPlay muted style={{ width: "300px", height: "200px", border: "2px solid black" }}></video>
-                </div>
-                <div>
-                    <h3>Remote Video</h3>
-                    <video ref={remoteVideoRef} autoPlay style={{ width: "300px", height: "200px", border: "2px solid red" }}></video>
-                </div>
-            </div>
-        </div>
-    );
+  return (
+    <div>
+      <h2>WebRTC Video Call</h2>
+      <div style={{ display: "flex", gap: "10px" }}>
+        <video
+          ref={(video) => video && (video.srcObject = localVideo)}
+          autoPlay
+          playsInline
+          muted
+          style={{ width: "300px", height: "200px", border: "1px solid black" }}
+        />
+        <video
+          ref={(video) => video && (video.srcObject = remoteVideo)}
+          autoPlay
+          playsInline
+          style={{ width: "300px", height: "200px", border: "1px solid red" }}
+        />
+      </div>
+      <button onClick={() => callUser("other-user-id")}>Call</button>
+    </div>
+  );
 };
 
 export default PeerConnection;
