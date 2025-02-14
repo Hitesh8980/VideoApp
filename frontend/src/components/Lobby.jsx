@@ -13,6 +13,7 @@ const Lobby = () => {
     }
     navigate(`/room/${roomId}`);
   };
+
   const createRoom = () => {
     const newRoomId = uuidV4();
     navigate(`/room/${newRoomId}`);
@@ -21,12 +22,7 @@ const Lobby = () => {
   return (
     <div>
       <h1>Enter Room ID</h1>
-      <input
-        type="text"
-        value={roomId}
-        onChange={(e) => setRoomId(e.target.value)}
-        placeholder="Enter Room ID"
-      />
+      <input type="text" value={roomId} onChange={(e) => setRoomId(e.target.value)} placeholder="Enter Room ID" />
       <button onClick={handleJoinRoom}>Join Room</button>
       <button onClick={createRoom}>Create New Room</button>
     </div>
