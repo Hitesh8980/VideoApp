@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef } from "react";
 import { io } from "socket.io-client";
 import Peer from "simple-peer";
 
-const socket = io("https://videoapp-q3ld.onrender.com"); // Update with your backend URL
+const socket = io("https://videoapp-q3ld.onrender.com");
 
 const PeerConnection = () => {
     const [myId, setMyId] = useState("");
@@ -10,11 +10,17 @@ const PeerConnection = () => {
     const [stream, setStream] = useState(null);
     const peersRef = useRef({});
 
+    const localVideoRef = useRef();
+    const remoteVideoRef = useRef();
+
     useEffect(() => {
         // Get user media stream
         navigator.mediaDevices.getUserMedia({ video: true, audio: true })
             .then((myStream) => {
                 setStream(myStream);
+                if (localVideoRef.current) {
+                    localVideoRef.current.srcObject = myStream;
+                }
             })
             .catch((err) => console.error("Error accessing media devices:", err));
 
@@ -22,13 +28,35 @@ const PeerConnection = () => {
         socket.on("me", (id) => {
             console.log("My socket ID:", id);
             setMyId(id);
+            socket.emit("joinRoom", id);
         });
 
-        // When a new user joins
         socket.on("newUser", (userId) => {
             console.log("New user joined:", userId);
             setUsers((prevUsers) => [...prevUsers, userId]);
             autoCallUser(userId);
+        });
+
+        socket.on("incomingCall", ({ from, signal }) => {
+            console.log("Incoming call from:", from);
+            const peer = new Peer({
+                initiator: false,
+                trickle: false,
+                stream: stream,
+            });
+
+            peer.on("signal", (signal) => {
+                socket.emit("acceptCall", { to: from, signal });
+            });
+
+            peer.on("stream", (remoteStream) => {
+                if (remoteVideoRef.current) {
+                    remoteVideoRef.current.srcObject = remoteStream;
+                }
+            });
+
+            peer.signal(signal);
+            peersRef.current[from] = peer;
         });
 
         return () => {
@@ -37,17 +65,12 @@ const PeerConnection = () => {
     }, []);
 
     const autoCallUser = (userToCall) => {
-        if (!userToCall) {
-            console.error("No user ID provided for calling.");
+        if (!userToCall || !stream) {
+            console.error("Cannot call, missing user or stream.");
             return;
         }
 
-        if (!stream) {
-            console.error("Media stream is not ready yet.");
-            return;
-        }
-
-        console.log("Calling user automatically:", userToCall);
+        console.log("Calling user:", userToCall);
 
         const peer = new Peer({
             initiator: true,
@@ -59,12 +82,10 @@ const PeerConnection = () => {
             socket.emit("callUser", { userToCall, signal });
         });
 
-        peer.on("connect", () => {
-            console.log("Connected with", userToCall);
-        });
-
-        peer.on("error", (err) => {
-            console.error("Peer connection error:", err);
+        peer.on("stream", (remoteStream) => {
+            if (remoteVideoRef.current) {
+                remoteVideoRef.current.srcObject = remoteStream;
+            }
         });
 
         peersRef.current[userToCall] = peer;
@@ -80,6 +101,11 @@ const PeerConnection = () => {
                     <li key={user}>{user}</li>
                 ))}
             </ul>
+            <div>
+                <h3>Video Call</h3>
+                <video ref={localVideoRef} autoPlay playsInline muted />
+                <video ref={remoteVideoRef} autoPlay playsInline />
+            </div>
         </div>
     );
 };
