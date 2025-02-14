@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from "react";
 import { useParams } from "react-router-dom";
 import { io } from "socket.io-client";
 
-const socket = io("https://videoapp-q3ld.onrender.com/create");
+const socket = io("https://videoapp-q3ld.onrender.com");
  // Change if backend is on another port
 
 const VideoCall = () => {
@@ -85,15 +85,16 @@ const VideoCall = () => {
   };
 
   socket.on("offer", async ({ offer, from }) => {
-    console.log("Received an offer from:", from);
-  
     peerConnection.current = new RTCPeerConnection();
   
-    peerConnection.current.ontrack = (event) => {
-      console.log("Receiving remote stream...");
-      if (remoteVideoRef.current) {
-        remoteVideoRef.current.srcObject = event.streams[0];
+    peerConnection.current.onicecandidate = (event) => {
+      if (event.candidate) {
+        socket.emit("ice-candidate", { candidate: event.candidate, to: from });
       }
+    };
+  
+    peerConnection.current.ontrack = (event) => {
+      remoteVideoRef.current.srcObject = event.streams[0];
     };
   
     localStream.current.getTracks().forEach((track) => {
@@ -106,6 +107,11 @@ const VideoCall = () => {
   
     socket.emit("answer", { answer, to: from });
   });
+  
+  socket.on("ice-candidate", ({ candidate }) => {
+    peerConnection.current.addIceCandidate(new RTCIceCandidate(candidate));
+  });
+  
   
 
   socket.on("answer", async ({ answer }) => {
@@ -133,7 +139,7 @@ const VideoCall = () => {
   };
 
   const copyLink = () => {
-    const roomLink = `${window.location.origin}/room/${roomId}`;
+    const roomLink = `${window.location.origin}/room/${roomId}`; // Ensure correct format
     navigator.clipboard.writeText(roomLink);
     alert("Room link copied! Share it with others to join.");
   };
