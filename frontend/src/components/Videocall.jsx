@@ -7,8 +7,6 @@ const socket = io("https://videoapp-q3ld.onrender.com");
 const VideoCall = () => {
   const { roomId } = useParams();
   const [remoteSocketId, setRemoteSocketId] = useState(null);
-  const [isAudioMuted, setIsAudioMuted] = useState(false);
-  const [isVideoOff, setIsVideoOff] = useState(false);
   const myVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
   const peerConnection = useRef(null);
@@ -20,7 +18,7 @@ const VideoCall = () => {
     socket.on("user-connected", async (socketId) => {
       console.log("User connected:", socketId);
       setRemoteSocketId(socketId);
-      await startCall(socketId);
+      if (!peerConnection.current) await startCall(socketId);
     });
 
     socket.on("user-disconnected", (socketId) => {
@@ -28,19 +26,26 @@ const VideoCall = () => {
       if (remoteSocketId === socketId) {
         setRemoteSocketId(null);
         if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
+        peerConnection.current?.close();
+        peerConnection.current = null;
       }
     });
 
     socket.on("offer", async ({ offer, from }) => {
+      console.log("Received Offer:", from);
       await handleOffer(offer, from);
     });
 
     socket.on("answer", async ({ answer }) => {
+      console.log("Received Answer");
       await peerConnection.current.setRemoteDescription(answer);
     });
 
     socket.on("ice-candidate", ({ candidate }) => {
-      if (candidate) peerConnection.current.addIceCandidate(new RTCIceCandidate(candidate));
+      if (candidate) {
+        console.log("Received ICE Candidate");
+        peerConnection.current?.addIceCandidate(new RTCIceCandidate(candidate));
+      }
     });
 
     startLocalStream();
@@ -51,7 +56,8 @@ const VideoCall = () => {
       socket.off("offer");
       socket.off("answer");
       socket.off("ice-candidate");
-      if (peerConnection.current) peerConnection.current.close();
+      peerConnection.current?.close();
+      peerConnection.current = null;
     };
   }, [roomId, remoteSocketId]);
 
@@ -67,18 +73,23 @@ const VideoCall = () => {
   };
 
   const startCall = async (socketId) => {
-    peerConnection.current = new RTCPeerConnection();
-    
+    console.log("Starting call with", socketId);
+    peerConnection.current = new RTCPeerConnection({
+      iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+    });
+
     localStream.current.getTracks().forEach((track) => {
       peerConnection.current.addTrack(track, localStream.current);
     });
 
     peerConnection.current.ontrack = (event) => {
+      console.log("Received remote track");
       if (remoteVideoRef.current) remoteVideoRef.current.srcObject = event.streams[0];
     };
 
     peerConnection.current.onicecandidate = (event) => {
       if (event.candidate) {
+        console.log("Sending ICE Candidate");
         socket.emit("ice-candidate", { candidate: event.candidate, to: socketId });
       }
     };
@@ -90,14 +101,19 @@ const VideoCall = () => {
   };
 
   const handleOffer = async (offer, from) => {
-    peerConnection.current = new RTCPeerConnection();
+    console.log("Handling received offer from:", from);
+    peerConnection.current = new RTCPeerConnection({
+      iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+    });
 
     peerConnection.current.ontrack = (event) => {
+      console.log("Received remote track in offer handler");
       if (remoteVideoRef.current) remoteVideoRef.current.srcObject = event.streams[0];
     };
 
     peerConnection.current.onicecandidate = (event) => {
       if (event.candidate) {
+        console.log("Sending ICE Candidate from answer side");
         socket.emit("ice-candidate", { candidate: event.candidate, to: from });
       }
     };
