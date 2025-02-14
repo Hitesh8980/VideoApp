@@ -1,72 +1,88 @@
 import React, { useEffect, useRef, useState } from "react";
 import Peer from "simple-peer";
+import socket from "../utils/socket";
 
-const PeerConnection = ({ socket, stream, remoteSocketId }) => {
-  const [peer, setPeer] = useState(null);
-  const [remoteStream, setRemoteStream] = useState(null);
-  const videoRef = useRef(null);
+const PeerConnection = ({ me, name, roomId }) => {
+    const [stream, setStream] = useState(null);
+    const [peers, setPeers] = useState([]);
+    const myVideo = useRef();
+    const peersRef = useRef([]);
 
-  useEffect(() => {
-    if (!socket) {
-      console.error("Socket is not initialized.");
-      return;
+    useEffect(() => {
+        navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then((currentStream) => {
+            setStream(currentStream);
+            if (myVideo.current) myVideo.current.srcObject = currentStream;
+
+            socket.emit("joinRoom", { roomId, userId: me, name });
+
+            socket.on("allUsers", (users) => {
+                const newPeers = [];
+                users.forEach((user) => {
+                    const peer = createPeer(user.userId, socket.id, currentStream);
+                    peersRef.current.push({ peerId: user.userId, peer });
+                    newPeers.push(peer);
+                });
+                setPeers(newPeers);
+            });
+
+            socket.on("userJoined", ({ userId, signal }) => {
+                const peer = addPeer(userId, signal, currentStream);
+                peersRef.current.push({ peerId: userId, peer });
+                setPeers((prev) => [...prev, peer]);
+            });
+
+            socket.on("receivingReturnedSignal", ({ id, signal }) => {
+                const peerObj = peersRef.current.find((p) => p.peerId === id);
+                if (peerObj) {
+                    peerObj.peer.signal(signal);
+                }
+            });
+        });
+
+        return () => {
+            socket.emit("leaveRoom", { roomId, userId: me });
+        };
+    }, []);
+
+    function createPeer(userToSignal, callerId, stream) {
+        const peer = new Peer({
+            initiator: true,
+            trickle: false,
+            stream,
+        });
+
+        peer.on("signal", (signal) => {
+            socket.emit("sendingSignal", { userToSignal, callerId, signal });
+        });
+
+        return peer;
     }
-    if (!stream) {
-      console.error("Local stream is missing.");
-      return;
+
+    function addPeer(incomingSignal, callerId, stream) {
+        const peer = new Peer({
+            initiator: false,
+            trickle: false,
+            stream,
+        });
+
+        peer.on("signal", (signal) => {
+            socket.emit("returningSignal", { signal, callerId });
+        });
+
+        peer.signal(incomingSignal);
+        return peer;
     }
-    if (!remoteSocketId) {
-      console.error("Remote Socket ID is missing.");
-      return;
-    }
 
-    console.log("✅ All dependencies are available, initializing Peer...");
-
-    const newPeer = new Peer({
-      initiator: false,
-      trickle: false,
-      stream,
-    });
-
-    newPeer.on("signal", (data) => {
-      socket.emit("signal", { signal: data, to: remoteSocketId });
-    });
-
-    newPeer.on("stream", (remoteStream) => {
-      console.log("📡 Received remote stream.");
-      setRemoteStream(remoteStream);
-      if (videoRef.current) {
-        videoRef.current.srcObject = remoteStream;
-      }
-    });
-
-    newPeer.on("error", (err) => {
-      console.error("⚠️ Peer error:", err);
-    });
-
-    socket.on("signal", ({ signal }) => {
-      newPeer.signal(signal);
-    });
-
-    setPeer(newPeer);
-
-    return () => {
-      console.log("🛑 Cleaning up Peer...");
-      newPeer.destroy();
-      socket.off("signal");
-    };
-  }, [socket, stream, remoteSocketId]);
-
-  return (
-    <div>
-      <h3>Peer Connection</h3>
-      {remoteStream ? (
-        <video ref={videoRef} autoPlay playsInline width="300px" />
-      ) : (
-        <p>Waiting for remote video...</p>
-      )}
-    </div>
-  );
+    return (
+        <div>
+            <h2>Room: {roomId}</h2>
+            <video ref={myVideo} autoPlay playsInline muted style={{ width: "300px", border: "1px solid black" }} />
+            {peers.map((peer, index) => (
+                <video key={index} ref={(ref) => (ref ? (peer.video = ref) : null)} autoPlay playsInline />
+            ))}
+            <p>Share this link to invite someone: {window.location.href}</p>
+        </div>
+    );
 };
 
 export default PeerConnection;

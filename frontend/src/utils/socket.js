@@ -1,16 +1,7 @@
-import { io } from "socket.io-client";
+import io from "socket.io-client";
 
-const socket = io("http://localhost:5003", {
-  transports: ["websocket", "polling"], // Ensures compatibility
-  reconnectionAttempts: 5, // Try reconnecting 5 times
-});
+const SOCKET_SERVER_URL = "https://videoapp-q3ld.onrender.com";
 
-socket.on("connect", () => {
-  console.log("Connected to socket server:", socket.id);
-});
-
-socket.on("connect_error", (err) => {
-  console.error("Socket connection error:", err);
-});
+const socket = io.connect(SOCKET_SERVER_URL);
 
 export default socket;

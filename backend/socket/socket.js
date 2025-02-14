@@ -8,43 +8,44 @@ function setupSocket(server) {
     }
   });
 
-  io.on("connection", (socket) => {
-    console.log("A user connected: ", socket.id);
+  const rooms = {};
 
-    // Send the socket ID to frontend
+io.on("connection", (socket) => {
     socket.emit("me", socket.id);
 
-    // Handle user joining a room
-    socket.on("join-room", (roomId, userId) => {
-      socket.join(roomId);
-      socket.to(roomId).emit("user-connected", userId);
+    socket.on("joinRoom", ({ roomId, userId, name }) => {
+        if (!rooms[roomId]) rooms[roomId] = [];
+        rooms[roomId].push({ userId, name });
+
+        socket.join(roomId);
+        socket.emit("allUsers", rooms[roomId].filter((user) => user.userId !== userId));
+
+        socket.broadcast.to(roomId).emit("userJoined", { userId });
     });
 
-    // Handle user signaling
-    socket.on("signal", (data) => {
-      io.to(data.room).emit("signal", data);
+    socket.on("sendingSignal", ({ userToSignal, callerId, signal }) => {
+        io.to(userToSignal).emit("userJoined", { callerId, signal });
     });
 
-    // Handle call initiation
-    socket.on("callUser", (data) => {
-      io.to(data.userToCall).emit("callUser", { 
-        signal: data.signalData, 
-        from: data.from, 
-        name: data.name 
-      });
+    socket.on("returningSignal", ({ signal, callerId }) => {
+        io.to(callerId).emit("receivingReturnedSignal", { id: socket.id, signal });
     });
 
-    // Handle answering a call
-    socket.on("answerCall", (data) => {
-      io.to(data.to).emit("callAccepted", data.signal);
+    socket.on("leaveRoom", ({ roomId, userId }) => {
+        if (rooms[roomId]) {
+            rooms[roomId] = rooms[roomId].filter((user) => user.userId !== userId);
+        }
+        socket.leave(roomId);
+        socket.broadcast.to(roomId).emit("userLeft", userId);
     });
 
-    // Handle call disconnection
     socket.on("disconnect", () => {
-      socket.broadcast.emit("callEnded");
-      console.log("User disconnected: ", socket.id);
+        Object.keys(rooms).forEach((roomId) => {
+            rooms[roomId] = rooms[roomId].filter((user) => user.userId !== socket.id);
+            io.to(roomId).emit("userLeft", socket.id);
+        });
     });
-  });
+});
 }
 
 module.exports = { setupSocket };
