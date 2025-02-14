@@ -1,108 +1,87 @@
-import React, { useEffect, useRef, useState } from "react";
-import { useParams } from "react-router-dom";
-import io from "socket.io-client";
-import SimplePeer from "simple-peer";
+import React, { useEffect, useState, useRef } from "react";
+import { io } from "socket.io-client";
+import Peer from "simple-peer";
 
-const socket = io("https://videoapp-q3ld.onrender.com"); // Ensure this is correct
+const socket = io("https://videoapp-q3ld.onrender.com"); // Update with your backend URL
 
-function PeerConnection({ me, name }) {
-    const { roomId } = useParams();
+const PeerConnection = () => {
+    const [myId, setMyId] = useState("");
+    const [users, setUsers] = useState([]);
     const [stream, setStream] = useState(null);
-    const [callAccepted, setCallAccepted] = useState(false);
-    const [callerSignal, setCallerSignal] = useState(null);
-    const [peerId, setPeerId] = useState(null);
-
-    const myVideo = useRef();
-    const userVideo = useRef();
-    const peerRef = useRef();
+    const peersRef = useRef({});
 
     useEffect(() => {
-        navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then((stream) => {
-            setStream(stream);
-            if (myVideo.current) {
-                myVideo.current.srcObject = stream;
-            }
+        // Get user media stream
+        navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+            .then((myStream) => {
+                setStream(myStream);
+            })
+            .catch((err) => console.error("Error accessing media devices:", err));
+
+        // Handle connection
+        socket.on("me", (id) => {
+            console.log("My socket ID:", id);
+            setMyId(id);
         });
 
-        socket.emit("join-room", { roomId, name });
-
-        socket.on("user-joined", ({ id }) => {
-            console.log("New user joined:", id);
-            setPeerId(id);
+        // When a new user joins
+        socket.on("newUser", (userId) => {
+            console.log("New user joined:", userId);
+            setUsers((prevUsers) => [...prevUsers, userId]);
+            autoCallUser(userId);
         });
 
-        socket.on("call-received", ({ signal, from }) => {
-            console.log("Receiving a call from:", from);
-            setCallerSignal(signal);
-            setPeerId(from);
-            setCallAccepted(true);
-        });
+        return () => {
+            socket.disconnect();
+        };
+    }, []);
 
-    }, [roomId]);
-
-    const callUser = () => {
-        if (!peerId) {
-            console.log("No peer ID to call");
+    const autoCallUser = (userToCall) => {
+        if (!userToCall) {
+            console.error("No user ID provided for calling.");
             return;
         }
 
-        const peer = new SimplePeer({
+        if (!stream) {
+            console.error("Media stream is not ready yet.");
+            return;
+        }
+
+        console.log("Calling user automatically:", userToCall);
+
+        const peer = new Peer({
             initiator: true,
             trickle: false,
             stream: stream,
         });
 
-        peer.on("signal", (data) => {
-            socket.emit("call-user", { userToCall: peerId, signalData: data, from: me });
+        peer.on("signal", (signal) => {
+            socket.emit("callUser", { userToCall, signal });
         });
 
-        peer.on("stream", (peerStream) => {
-            if (userVideo.current) {
-                userVideo.current.srcObject = peerStream;
-            }
+        peer.on("connect", () => {
+            console.log("Connected with", userToCall);
         });
 
-        socket.on("call-accepted", (signal) => {
-            peer.signal(signal);
+        peer.on("error", (err) => {
+            console.error("Peer connection error:", err);
         });
 
-        peerRef.current = peer;
-    };
-
-    const answerCall = () => {
-        setCallAccepted(true);
-
-        const peer = new SimplePeer({
-            initiator: false,
-            trickle: false,
-            stream: stream,
-        });
-
-        peer.on("signal", (data) => {
-            socket.emit("accept-call", { signal: data, to: peerId });
-        });
-
-        peer.on("stream", (peerStream) => {
-            if (userVideo.current) {
-                userVideo.current.srcObject = peerStream;
-            }
-        });
-
-        peer.signal(callerSignal);
-        peerRef.current = peer;
+        peersRef.current[userToCall] = peer;
     };
 
     return (
-        <div style={{ textAlign: "center" }}>
-            <h2>Room ID: {roomId}</h2>
-            <div>
-                <video ref={myVideo} autoPlay muted style={{ width: "300px" }} />
-                {callAccepted && <video ref={userVideo} autoPlay style={{ width: "300px" }} />}
-            </div>
-            {!callAccepted && <button onClick={callUser}>Call</button>}
-            {callerSignal && !callAccepted && <button onClick={answerCall}>Answer</button>}
+        <div>
+            <h2>My ID: {myId}</h2>
+            <p>Share this link: {window.location.href}</p>
+            <h3>Connected Users:</h3>
+            <ul>
+                {users.map((user) => (
+                    <li key={user}>{user}</li>
+                ))}
+            </ul>
         </div>
     );
-}
+};
 
 export default PeerConnection;
