@@ -1,88 +1,108 @@
 import React, { useEffect, useRef, useState } from "react";
-import Peer from "simple-peer";
-import socket from "../utils/socket";
+import { useParams } from "react-router-dom";
+import io from "socket.io-client";
+import SimplePeer from "simple-peer";
 
-const PeerConnection = ({ me, name, roomId }) => {
+const socket = io("https://videoapp-q3ld.onrender.com"); // Ensure this is correct
+
+function PeerConnection({ me, name }) {
+    const { roomId } = useParams();
     const [stream, setStream] = useState(null);
-    const [peers, setPeers] = useState([]);
+    const [callAccepted, setCallAccepted] = useState(false);
+    const [callerSignal, setCallerSignal] = useState(null);
+    const [peerId, setPeerId] = useState(null);
+
     const myVideo = useRef();
-    const peersRef = useRef([]);
+    const userVideo = useRef();
+    const peerRef = useRef();
 
     useEffect(() => {
-        navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then((currentStream) => {
-            setStream(currentStream);
-            if (myVideo.current) myVideo.current.srcObject = currentStream;
-
-            socket.emit("joinRoom", { roomId, userId: me, name });
-
-            socket.on("allUsers", (users) => {
-                const newPeers = [];
-                users.forEach((user) => {
-                    const peer = createPeer(user.userId, socket.id, currentStream);
-                    peersRef.current.push({ peerId: user.userId, peer });
-                    newPeers.push(peer);
-                });
-                setPeers(newPeers);
-            });
-
-            socket.on("userJoined", ({ userId, signal }) => {
-                const peer = addPeer(userId, signal, currentStream);
-                peersRef.current.push({ peerId: userId, peer });
-                setPeers((prev) => [...prev, peer]);
-            });
-
-            socket.on("receivingReturnedSignal", ({ id, signal }) => {
-                const peerObj = peersRef.current.find((p) => p.peerId === id);
-                if (peerObj) {
-                    peerObj.peer.signal(signal);
-                }
-            });
+        navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then((stream) => {
+            setStream(stream);
+            if (myVideo.current) {
+                myVideo.current.srcObject = stream;
+            }
         });
 
-        return () => {
-            socket.emit("leaveRoom", { roomId, userId: me });
-        };
-    }, []);
+        socket.emit("join-room", { roomId, name });
 
-    function createPeer(userToSignal, callerId, stream) {
-        const peer = new Peer({
+        socket.on("user-joined", ({ id }) => {
+            console.log("New user joined:", id);
+            setPeerId(id);
+        });
+
+        socket.on("call-received", ({ signal, from }) => {
+            console.log("Receiving a call from:", from);
+            setCallerSignal(signal);
+            setPeerId(from);
+            setCallAccepted(true);
+        });
+
+    }, [roomId]);
+
+    const callUser = () => {
+        if (!peerId) {
+            console.log("No peer ID to call");
+            return;
+        }
+
+        const peer = new SimplePeer({
             initiator: true,
             trickle: false,
-            stream,
+            stream: stream,
         });
 
-        peer.on("signal", (signal) => {
-            socket.emit("sendingSignal", { userToSignal, callerId, signal });
+        peer.on("signal", (data) => {
+            socket.emit("call-user", { userToCall: peerId, signalData: data, from: me });
         });
 
-        return peer;
-    }
+        peer.on("stream", (peerStream) => {
+            if (userVideo.current) {
+                userVideo.current.srcObject = peerStream;
+            }
+        });
 
-    function addPeer(incomingSignal, callerId, stream) {
-        const peer = new Peer({
+        socket.on("call-accepted", (signal) => {
+            peer.signal(signal);
+        });
+
+        peerRef.current = peer;
+    };
+
+    const answerCall = () => {
+        setCallAccepted(true);
+
+        const peer = new SimplePeer({
             initiator: false,
             trickle: false,
-            stream,
+            stream: stream,
         });
 
-        peer.on("signal", (signal) => {
-            socket.emit("returningSignal", { signal, callerId });
+        peer.on("signal", (data) => {
+            socket.emit("accept-call", { signal: data, to: peerId });
         });
 
-        peer.signal(incomingSignal);
-        return peer;
-    }
+        peer.on("stream", (peerStream) => {
+            if (userVideo.current) {
+                userVideo.current.srcObject = peerStream;
+            }
+        });
+
+        peer.signal(callerSignal);
+        peerRef.current = peer;
+    };
 
     return (
-        <div>
-            <h2>Room: {roomId}</h2>
-            <video ref={myVideo} autoPlay playsInline muted style={{ width: "300px", border: "1px solid black" }} />
-            {peers.map((peer, index) => (
-                <video key={index} ref={(ref) => (ref ? (peer.video = ref) : null)} autoPlay playsInline />
-            ))}
-            <p>Share this link to invite someone: {window.location.href}</p>
+        <div style={{ textAlign: "center" }}>
+            <h2>Room ID: {roomId}</h2>
+            <div>
+                <video ref={myVideo} autoPlay muted style={{ width: "300px" }} />
+                {callAccepted && <video ref={userVideo} autoPlay style={{ width: "300px" }} />}
+            </div>
+            {!callAccepted && <button onClick={callUser}>Call</button>}
+            {callerSignal && !callAccepted && <button onClick={answerCall}>Answer</button>}
         </div>
     );
-};
+}
 
 export default PeerConnection;
