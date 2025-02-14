@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams } from "react-router-dom";
 import { io } from "socket.io-client";
 
@@ -11,57 +11,15 @@ const VideoCall = () => {
   const remoteVideoRef = useRef(null);
   const peerConnection = useRef(null);
   const localStream = useRef(null);
+  const remoteSocketIdRef = useRef(null); // To track latest remoteSocketId
 
+  // Sync ref with state
   useEffect(() => {
-    socket.emit("join-room", roomId);
+    remoteSocketIdRef.current = remoteSocketId;
+  }, [remoteSocketId]);
 
-    socket.on("user-connected", async (socketId) => {
-      console.log("User connected:", socketId);
-      setRemoteSocketId(socketId);
-      if (!peerConnection.current) await startCall(socketId);
-    });
-
-    socket.on("user-disconnected", (socketId) => {
-      console.log("User disconnected:", socketId);
-      if (remoteSocketId === socketId) {
-        setRemoteSocketId(null);
-        if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
-        peerConnection.current?.close();
-        peerConnection.current = null;
-      }
-    });
-
-    socket.on("offer", async ({ offer, from }) => {
-      console.log("Received Offer:", from);
-      await handleOffer(offer, from);
-    });
-
-    socket.on("answer", async ({ answer }) => {
-      console.log("Received Answer");
-      await peerConnection.current.setRemoteDescription(new RTCSessionDescription(answer));
-    });
-
-    socket.on("ice-candidate", ({ candidate }) => {
-      if (candidate) {
-        console.log("Received ICE Candidate");
-        peerConnection.current?.addIceCandidate(new RTCIceCandidate(candidate));
-      }
-    });
-
-    startLocalStream();
-
-    return () => {
-      socket.off("user-connected");
-      socket.off("user-disconnected");
-      socket.off("offer");
-      socket.off("answer");
-      socket.off("ice-candidate");
-      peerConnection.current?.close();
-      peerConnection.current = null;
-    };
-  }, [roomId, remoteSocketId]);
-
-  const startLocalStream = async () => {
+  const startLocalStream = useCallback(async () => {
+    if (localStream.current) return;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
       localStream.current = stream;
@@ -69,60 +27,142 @@ const VideoCall = () => {
     } catch (error) {
       console.error("Error accessing media devices:", error);
       alert("Please allow camera & microphone access.");
+      throw error;
     }
-  };
+  }, []);
 
-  const startCall = async (socketId) => {
-    console.log("Starting call with", socketId);
-    peerConnection.current = new RTCPeerConnection({
-      iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-    });
+  const handleOffer = useCallback(async (offer, from) => {
+    try {
+      if (!localStream.current) await startLocalStream();
 
-    peerConnection.current.onicecandidate = (event) => {
-      if (event.candidate) {
-        socket.emit("ice-candidate", { candidate: event.candidate, to: socketId });
+      if (peerConnection.current) {
+        peerConnection.current.close();
+        peerConnection.current = null;
+      }
+
+      peerConnection.current = new RTCPeerConnection({
+        iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+      });
+
+      peerConnection.current.onicecandidate = (event) => {
+        if (event.candidate) {
+          socket.emit("ice-candidate", { candidate: event.candidate, to: from });
+        }
+      };
+
+      peerConnection.current.ontrack = (event) => {
+        if (remoteVideoRef.current) remoteVideoRef.current.srcObject = event.streams[0];
+      };
+
+      localStream.current.getTracks().forEach((track) => {
+        peerConnection.current.addTrack(track, localStream.current);
+      });
+
+      await peerConnection.current.setRemoteDescription(new RTCSessionDescription(offer));
+      const answer = await peerConnection.current.createAnswer();
+      await peerConnection.current.setLocalDescription(answer);
+
+      socket.emit("answer", { answer, to: from });
+    } catch (error) {
+      console.error("Error handling offer:", error);
+    }
+  }, [startLocalStream]);
+
+  const startCall = useCallback(async (socketId) => {
+    try {
+      if (!localStream.current) await startLocalStream();
+
+      if (peerConnection.current) {
+        peerConnection.current.close();
+        peerConnection.current = null;
+      }
+
+      peerConnection.current = new RTCPeerConnection({
+        iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+      });
+
+      peerConnection.current.onicecandidate = (event) => {
+        if (event.candidate) {
+          socket.emit("ice-candidate", { candidate: event.candidate, to: socketId });
+        }
+      };
+
+      peerConnection.current.ontrack = (event) => {
+        if (remoteVideoRef.current) remoteVideoRef.current.srcObject = event.streams[0];
+      };
+
+      localStream.current.getTracks().forEach((track) => {
+        peerConnection.current.addTrack(track, localStream.current);
+      });
+
+      const offer = await peerConnection.current.createOffer();
+      await peerConnection.current.setLocalDescription(offer);
+
+      socket.emit("offer", { offer, to: socketId });
+    } catch (error) {
+      console.error("Error starting call:", error);
+    }
+  }, [startLocalStream]);
+
+  useEffect(() => {
+    socket.emit("join-room", roomId);
+
+    const onUserConnected = async (socketId) => {
+      console.log("User connected:", socketId);
+      setRemoteSocketId(socketId);
+      if (!peerConnection.current) await startCall(socketId);
+    };
+
+    const onUserDisconnected = (socketId) => {
+      console.log("User disconnected:", socketId);
+      if (remoteSocketIdRef.current === socketId) {
+        setRemoteSocketId(null);
+        if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
+        peerConnection.current?.close();
+        peerConnection.current = null;
       }
     };
 
-    peerConnection.current.ontrack = (event) => {
-      if (remoteVideoRef.current) remoteVideoRef.current.srcObject = event.streams[0];
+    const onOffer = async ({ offer, from }) => {
+      console.log("Received Offer:", from);
+      await handleOffer(offer, from);
     };
 
-    localStream.current.getTracks().forEach((track) => {
-      peerConnection.current.addTrack(track, localStream.current);
-    });
+    const onAnswer = async ({ answer }) => {
+      console.log("Received Answer");
+      await peerConnection.current.setRemoteDescription(new RTCSessionDescription(answer));
+    };
 
-    const offer = await peerConnection.current.createOffer();
-    await peerConnection.current.setLocalDescription(offer);
-
-    socket.emit("offer", { offer, to: socketId });
-  };
-
-  const handleOffer = async (offer, from) => {
-    peerConnection.current = new RTCPeerConnection({
-      iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-    });
-
-    peerConnection.current.onicecandidate = (event) => {
-      if (event.candidate) {
-        socket.emit("ice-candidate", { candidate: event.candidate, to: from });
+    const onIceCandidate = ({ candidate }) => {
+      if (candidate) {
+        console.log("Received ICE Candidate");
+        peerConnection.current?.addIceCandidate(new RTCIceCandidate(candidate));
       }
     };
 
-    peerConnection.current.ontrack = (event) => {
-      if (remoteVideoRef.current) remoteVideoRef.current.srcObject = event.streams[0];
+    socket.on("user-connected", onUserConnected);
+    socket.on("user-disconnected", onUserDisconnected);
+    socket.on("offer", onOffer);
+    socket.on("answer", onAnswer);
+    socket.on("ice-candidate", onIceCandidate);
+
+    startLocalStream();
+
+    return () => {
+      socket.off("user-connected", onUserConnected);
+      socket.off("user-disconnected", onUserDisconnected);
+      socket.off("offer", onOffer);
+      socket.off("answer", onAnswer);
+      socket.off("ice-candidate", onIceCandidate);
+      peerConnection.current?.close();
+      peerConnection.current = null;
+      if (localStream.current) {
+        localStream.current.getTracks().forEach(track => track.stop());
+        localStream.current = null;
+      }
+      socket.emit("leave-room", roomId);
     };
-
-    localStream.current.getTracks().forEach((track) => {
-      peerConnection.current.addTrack(track, localStream.current);
-    });
-
-    await peerConnection.current.setRemoteDescription(new RTCSessionDescription(offer));
-    const answer = await peerConnection.current.createAnswer();
-    await peerConnection.current.setLocalDescription(answer);
-
-    socket.emit("answer", { answer, to: from });
-  };
+  }, [roomId, startCall, handleOffer, startLocalStream]);
 
   const copyLink = () => {
     const roomLink = `${window.location.origin}/room/${roomId}`;
