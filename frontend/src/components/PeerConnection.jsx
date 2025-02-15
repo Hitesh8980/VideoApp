@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import io from "socket.io-client";
 
-const SOCKET_SERVER_URL = "https://videoapp-q3ld.onrender.com"; // Change to your server URL
+const SOCKET_SERVER_URL = "https://videoapp-q3ld.onrender.com"; // Change to your actual server URL
 
 const PeerConnection = ({ roomId }) => {
   const socketRef = useRef(null);
@@ -14,16 +14,18 @@ const PeerConnection = ({ roomId }) => {
   useEffect(() => {
     console.log("⚡ Initializing PeerConnection...");
 
+    // Connect to socket
     socketRef.current = io(SOCKET_SERVER_URL);
     socketRef.current.emit("join-room", roomId);
 
     socketRef.current.on("user-joined", ({ id }) => {
-      console.log(`✅ user-joined event received: ${id}`);
+      console.log(`👤 User joined: ${id}`);
     });
 
     socketRef.current.on("call-received", ({ signal, from }) => {
       console.log("📞 Incoming call from:", from);
       peerRef.current.setRemoteDescription(new RTCSessionDescription(signal));
+
       peerRef.current.createAnswer().then((answer) => {
         peerRef.current.setLocalDescription(answer);
         socketRef.current.emit("accept-call", { signal: answer, to: from });
@@ -36,12 +38,13 @@ const PeerConnection = ({ roomId }) => {
     });
 
     socketRef.current.on("ice-candidate", ({ candidate }) => {
-      console.log("📡 ICE Candidate Received:", candidate);
+      console.log("🌍 ICE Candidate Received:", candidate);
       if (peerRef.current) {
         peerRef.current.addIceCandidate(new RTCIceCandidate(candidate));
       }
     });
 
+    // Initialize local stream
     navigator.mediaDevices
       .getUserMedia({ video: true, audio: true })
       .then((stream) => {
@@ -49,20 +52,23 @@ const PeerConnection = ({ roomId }) => {
         localStreamRef.current = stream;
         setLocalVideo(stream);
 
+        // Initialize Peer Connection
         peerRef.current = new RTCPeerConnection({
           iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
         });
 
-        peerRef.current.ontrack = (event) => {
-          console.log("🎥 Remote stream received");
-          setRemoteVideo(event.streams[0]);
-        };
-
         peerRef.current.onicecandidate = (event) => {
           if (event.candidate) {
             console.log("📡 ICE Candidate Generated:", event.candidate);
-            socketRef.current.emit("ice-candidate", { candidate: event.candidate });
+            socketRef.current.emit("ice-candidate", {
+              candidate: event.candidate,
+            });
           }
+        };
+
+        peerRef.current.ontrack = (event) => {
+          console.log("🎥 Remote stream received");
+          setRemoteVideo(event.streams[0]);
         };
 
         stream.getTracks().forEach((track) => {
