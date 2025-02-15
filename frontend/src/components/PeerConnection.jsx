@@ -22,6 +22,12 @@ const PeerConnection = ({ roomId }) => {
       console.log(`👤 User joined: ${id}`);
     });
 
+    // Handle ICE candidate exchange
+    socketRef.current.on("ice-candidate", ({ candidate }) => {
+      console.log("📡 ICE Candidate Received:", candidate);
+      peerRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+    });
+
     socketRef.current.on("call-received", ({ signal, from }) => {
       console.log("📞 Incoming call from:", from);
       peerRef.current.setRemoteDescription(new RTCSessionDescription(signal));
@@ -45,7 +51,25 @@ const PeerConnection = ({ roomId }) => {
         setLocalVideo(stream);
 
         // Initialize Peer Connection
-        peerRef.current = new RTCPeerConnection();
+        peerRef.current = new RTCPeerConnection({
+          iceServers: [
+            { urls: "stun:stun.l.google.com:19302" },
+            {
+              urls: "turn:your.turn.server:3478",
+              username: "your-username",
+              credential: "your-password",
+            },
+          ],
+        });
+
+        // ICE Candidate Exchange
+        peerRef.current.onicecandidate = (event) => {
+          if (event.candidate) {
+            console.log("📡 ICE Candidate Sent:", event.candidate);
+            socketRef.current.emit("ice-candidate", { candidate: event.candidate, to: roomId });
+          }
+        };
+
         peerRef.current.ontrack = (event) => {
           console.log("🎥 Remote stream received");
           setRemoteVideo(event.streams[0]);
@@ -65,6 +89,13 @@ const PeerConnection = ({ roomId }) => {
       if (peerRef.current) peerRef.current.close();
     };
   }, [roomId]);
+
+  // Set remote video stream to video element
+  useEffect(() => {
+    if (remoteStreamRef.current && remoteVideo) {
+      remoteStreamRef.current.srcObject = remoteVideo;
+    }
+  }, [remoteVideo]);
 
   const callUser = (userToCall) => {
     console.log("📞 Calling user:", userToCall);
@@ -90,7 +121,7 @@ const PeerConnection = ({ roomId }) => {
           style={{ width: "300px", height: "200px", border: "1px solid black" }}
         />
         <video
-          ref={(video) => video && (video.srcObject = remoteVideo)}
+          ref={remoteStreamRef}
           autoPlay
           playsInline
           style={{ width: "300px", height: "200px", border: "1px solid red" }}
