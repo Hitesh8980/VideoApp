@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import io from "socket.io-client";
 
-const SOCKET_SERVER_URL = "https://videoapp-q3ld.onrender.com"; // Change to your server URL
+const SOCKET_SERVER_URL = "https://videoapp-q3ld.onrender.com"; // Your server URL
 
 const PeerConnection = ({ roomId }) => {
   const socketRef = useRef(null);
@@ -19,17 +19,31 @@ const PeerConnection = ({ roomId }) => {
     socketRef.current.emit("join-room", roomId);
 
     socketRef.current.on("user-joined", ({ id }) => {
-      console.log(`👤 User joined: ${id}`);
-    });
-
-    // Handle ICE candidate exchange
-    socketRef.current.on("ice-candidate", ({ candidate }) => {
-      console.log("📡 ICE Candidate Received:", candidate);
-      peerRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+      console.log(`👤 User joined the room: ${id}`);
     });
 
     socketRef.current.on("call-received", ({ signal, from }) => {
       console.log("📞 Incoming call from:", from);
+      
+      peerRef.current = new RTCPeerConnection({
+        iceServers: [
+          { urls: "stun:stun.l.google.com:19302" }, // Google's STUN server
+          { urls: "stun:stun1.l.google.com:19302" }
+        ],
+      });
+
+      peerRef.current.ontrack = (event) => {
+        console.log("🎥 Remote stream received");
+        setRemoteVideo(event.streams[0]);
+      };
+
+      peerRef.current.onicecandidate = (event) => {
+        if (event.candidate) {
+          console.log("📡 ICE Candidate Sent:", event.candidate);
+          socketRef.current.emit("ice-candidate", { candidate: event.candidate, to: from });
+        }
+      };
+
       peerRef.current.setRemoteDescription(new RTCSessionDescription(signal));
       peerRef.current.createAnswer().then((answer) => {
         peerRef.current.setLocalDescription(answer);
@@ -40,6 +54,13 @@ const PeerConnection = ({ roomId }) => {
     socketRef.current.on("call-accepted", (signal) => {
       console.log("✅ Call accepted, setting remote description...");
       peerRef.current.setRemoteDescription(new RTCSessionDescription(signal));
+    });
+
+    socketRef.current.on("ice-candidate", ({ candidate }) => {
+      if (peerRef.current) {
+        peerRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+        console.log("📡 ICE Candidate Received:", candidate);
+      }
     });
 
     // Initialize local stream
@@ -54,25 +75,20 @@ const PeerConnection = ({ roomId }) => {
         peerRef.current = new RTCPeerConnection({
           iceServers: [
             { urls: "stun:stun.l.google.com:19302" },
-            {
-              urls: "turn:your.turn.server:3478",
-              username: "your-username",
-              credential: "your-password",
-            },
+            { urls: "stun:stun1.l.google.com:19302" }
           ],
         });
-
-        // ICE Candidate Exchange
-        peerRef.current.onicecandidate = (event) => {
-          if (event.candidate) {
-            console.log("📡 ICE Candidate Sent:", event.candidate);
-            socketRef.current.emit("ice-candidate", { candidate: event.candidate, to: roomId });
-          }
-        };
 
         peerRef.current.ontrack = (event) => {
           console.log("🎥 Remote stream received");
           setRemoteVideo(event.streams[0]);
+        };
+
+        peerRef.current.onicecandidate = (event) => {
+          if (event.candidate) {
+            console.log("📡 ICE Candidate Sent:", event.candidate);
+            socketRef.current.emit("ice-candidate", { candidate: event.candidate });
+          }
         };
 
         stream.getTracks().forEach((track) => {
@@ -90,15 +106,9 @@ const PeerConnection = ({ roomId }) => {
     };
   }, [roomId]);
 
-  // Set remote video stream to video element
-  useEffect(() => {
-    if (remoteStreamRef.current && remoteVideo) {
-      remoteStreamRef.current.srcObject = remoteVideo;
-    }
-  }, [remoteVideo]);
-
   const callUser = (userToCall) => {
     console.log("📞 Calling user:", userToCall);
+    
     peerRef.current.createOffer().then((offer) => {
       peerRef.current.setLocalDescription(offer);
       socketRef.current.emit("call-user", {
@@ -121,7 +131,7 @@ const PeerConnection = ({ roomId }) => {
           style={{ width: "300px", height: "200px", border: "1px solid black" }}
         />
         <video
-          ref={remoteStreamRef}
+          ref={(video) => video && (video.srcObject = remoteVideo)}
           autoPlay
           playsInline
           style={{ width: "300px", height: "200px", border: "1px solid red" }}
