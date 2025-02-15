@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import io from "socket.io-client";
 
-const SOCKET_SERVER_URL = "https://videoapp-q3ld.onrender.com"; // Your server URL
+const SOCKET_SERVER_URL = "https://videoapp-q3ld.onrender.com"; // Change to your server URL
 
 const PeerConnection = ({ roomId }) => {
   const socketRef = useRef(null);
@@ -14,36 +14,15 @@ const PeerConnection = ({ roomId }) => {
   useEffect(() => {
     console.log("⚡ Initializing PeerConnection...");
 
-    // Connect to socket
     socketRef.current = io(SOCKET_SERVER_URL);
     socketRef.current.emit("join-room", roomId);
 
     socketRef.current.on("user-joined", ({ id }) => {
-      console.log(`👤 User joined the room: ${id}`);
+      console.log(`✅ user-joined event received: ${id}`);
     });
 
     socketRef.current.on("call-received", ({ signal, from }) => {
       console.log("📞 Incoming call from:", from);
-      
-      peerRef.current = new RTCPeerConnection({
-        iceServers: [
-          { urls: "stun:stun.l.google.com:19302" }, // Google's STUN server
-          { urls: "stun:stun1.l.google.com:19302" }
-        ],
-      });
-
-      peerRef.current.ontrack = (event) => {
-        console.log("🎥 Remote stream received");
-        setRemoteVideo(event.streams[0]);
-      };
-
-      peerRef.current.onicecandidate = (event) => {
-        if (event.candidate) {
-          console.log("📡 ICE Candidate Sent:", event.candidate);
-          socketRef.current.emit("ice-candidate", { candidate: event.candidate, to: from });
-        }
-      };
-
       peerRef.current.setRemoteDescription(new RTCSessionDescription(signal));
       peerRef.current.createAnswer().then((answer) => {
         peerRef.current.setLocalDescription(answer);
@@ -57,13 +36,12 @@ const PeerConnection = ({ roomId }) => {
     });
 
     socketRef.current.on("ice-candidate", ({ candidate }) => {
+      console.log("📡 ICE Candidate Received:", candidate);
       if (peerRef.current) {
         peerRef.current.addIceCandidate(new RTCIceCandidate(candidate));
-        console.log("📡 ICE Candidate Received:", candidate);
       }
     });
 
-    // Initialize local stream
     navigator.mediaDevices
       .getUserMedia({ video: true, audio: true })
       .then((stream) => {
@@ -71,12 +49,8 @@ const PeerConnection = ({ roomId }) => {
         localStreamRef.current = stream;
         setLocalVideo(stream);
 
-        // Initialize Peer Connection
         peerRef.current = new RTCPeerConnection({
-          iceServers: [
-            { urls: "stun:stun.l.google.com:19302" },
-            { urls: "stun:stun1.l.google.com:19302" }
-          ],
+          iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
         });
 
         peerRef.current.ontrack = (event) => {
@@ -86,7 +60,7 @@ const PeerConnection = ({ roomId }) => {
 
         peerRef.current.onicecandidate = (event) => {
           if (event.candidate) {
-            console.log("📡 ICE Candidate Sent:", event.candidate);
+            console.log("📡 ICE Candidate Generated:", event.candidate);
             socketRef.current.emit("ice-candidate", { candidate: event.candidate });
           }
         };
@@ -108,7 +82,6 @@ const PeerConnection = ({ roomId }) => {
 
   const callUser = (userToCall) => {
     console.log("📞 Calling user:", userToCall);
-    
     peerRef.current.createOffer().then((offer) => {
       peerRef.current.setLocalDescription(offer);
       socketRef.current.emit("call-user", {
